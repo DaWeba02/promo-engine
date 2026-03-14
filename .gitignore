@@ -1,0 +1,26 @@
+# .NET build output
+bin/
+obj/
+
+# Visual Studio / Rider
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Test results
+TestResults/
+*.trx
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local tooling caches
+.dotnet/
+
+# Environment files
+.env
+.env.*

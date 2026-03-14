@@ -1,0 +1,11 @@
+﻿{
+  "customerId": "customer-123",
+  "currency": "EUR",
+  "couponCode": "SAVE20",
+  "strategy": "CustomerBestPrice",
+  "minimumMarginRate": 0.1,
+  "items": [
+    { "sku": "SKU-1", "quantity": 3, "unitPrice": 20, "unitCost": 10, "stockLevel": 50 },
+    { "sku": "SKU-2", "quantity": 2, "unitPrice": 15, "unitCost": 7, "stockLevel": 120 }
+  ]
+}
