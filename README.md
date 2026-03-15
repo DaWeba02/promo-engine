@@ -1,4 +1,6 @@
-﻿# PromoEngine
+[![ci](https://github.com/DaWeba02/promo-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/DaWeba02/promo-engine/actions/workflows/ci.yml)
+ 
+ # PromoEngine
 
 PromoEngine is a .NET 10 pricing and promotions engine built as a small Clean Architecture solution. It exposes minimal API endpoints for promotion CRUD, quote generation, single-strategy dry-run simulation, and multi-strategy simulation comparison, with SQL Server persistence for promotions, quote audits, redemptions, and budget consumption.
 
