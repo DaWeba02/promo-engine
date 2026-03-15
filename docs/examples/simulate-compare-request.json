@@ -1,8 +1,8 @@
 ﻿{
   "customerId": "retail-customer-42",
   "currency": "EUR",
-  "couponCode": "SAVE20",
-  "strategy": 0,
+  "couponCode": null,
+  "strategies": [0, 1, 2],
   "minimumMarginRate": 0.1,
   "channel": 1,
   "segment": 1,

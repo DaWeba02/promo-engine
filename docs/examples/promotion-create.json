@@ -1,9 +1,9 @@
 ﻿{
   "code": "PROMO-10",
   "name": "Ten Percent Off",
-  "description": "Ten percent off SKU-1",
+  "description": "Ten percent off SKU-1 for existing online customers",
   "campaignKey": "SPRING-2026",
-  "type": "PercentDiscount",
+  "type": 0,
   "isActive": true,
   "startsAtUtc": "2026-03-14T00:00:00Z",
   "endsAtUtc": "2026-12-31T23:59:59Z",
@@ -12,7 +12,7 @@
   "budgetCap": 10000,
   "budgetConsumed": 0,
   "value": 10,
-  "discountValueType": "Percentage",
+  "discountValueType": 1,
   "thresholdAmount": 0,
   "requiredQuantity": 0,
   "chargedQuantity": 0,
@@ -20,5 +20,14 @@
   "minimumMarginRate": 0.15,
   "couponCode": null,
   "targetSkus": ["SKU-1"],
-  "bundleSkus": []
+  "bundleSkus": [],
+  "channel": 1,
+  "segment": 1,
+  "isCombinable": true,
+  "budgetDailyCap": 1000,
+  "budgetPerCustomerCap": 100,
+  "minimumCartValue": 25,
+  "maximumDiscount": 30,
+  "fundingManufacturerRate": 0.5,
+  "fundingRetailerRate": 0.5
 }
