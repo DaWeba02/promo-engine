@@ -17,10 +17,12 @@ jobs:
         ports:
           - 14333:1433
         options: >-
-          --health-cmd "SQLCMD=$$(find /opt/mssql-tools* -path '*/bin/sqlcmd' | head -n 1); [ -n \"$$SQLCMD\" ] && $$SQLCMD -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1'"
+          --health-cmd "SQLCMD=$(find /opt/mssql-tools* -path '*/bin/sqlcmd' | head -n 1);
+          [ -n \"$SQLCMD\" ] && $SQLCMD -S localhost -U sa -P \"$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1'"
           --health-interval 15s
           --health-timeout 10s
-          --health-retries 10
+          --health-retries 20
+          --health-start-period 20s
 
     steps:
       - uses: actions/checkout@v4
