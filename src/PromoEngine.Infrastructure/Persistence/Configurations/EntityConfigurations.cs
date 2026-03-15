@@ -18,12 +18,19 @@ public sealed class PromotionEntityConfiguration : IEntityTypeConfiguration<Prom
         builder.Property(x => x.CouponCode).HasMaxLength(128);
         builder.Property(x => x.TargetSkus).HasColumnType("nvarchar(max)");
         builder.Property(x => x.BundleSkus).HasColumnType("nvarchar(max)");
+        builder.Property(x => x.IsCombinable).HasDefaultValue(true);
         builder.Property(x => x.BudgetCap).HasPrecision(18, 2);
         builder.Property(x => x.BudgetConsumed).HasPrecision(18, 2);
+        builder.Property(x => x.BudgetDailyCap).HasPrecision(18, 2);
+        builder.Property(x => x.BudgetPerCustomerCap).HasPrecision(18, 2);
         builder.Property(x => x.Value).HasPrecision(18, 2);
         builder.Property(x => x.ThresholdAmount).HasPrecision(18, 2);
         builder.Property(x => x.BundlePrice).HasPrecision(18, 2);
         builder.Property(x => x.MinimumMarginRate).HasPrecision(18, 4);
+        builder.Property(x => x.MinimumCartValue).HasPrecision(18, 2);
+        builder.Property(x => x.MaximumDiscount).HasPrecision(18, 2);
+        builder.Property(x => x.FundingManufacturerRate).HasPrecision(18, 4);
+        builder.Property(x => x.FundingRetailerRate).HasPrecision(18, 4);
     }
 }
 
@@ -54,5 +61,26 @@ public sealed class QuoteAuditEntityConfiguration : IEntityTypeConfiguration<Quo
         builder.Property(x => x.NetTotal).HasPrecision(18, 2);
         builder.Property(x => x.RequestJson).HasColumnType("nvarchar(max)");
         builder.Property(x => x.ResponseJson).HasColumnType("nvarchar(max)");
+    }
+}
+
+public sealed class BudgetConsumptionEntityConfiguration : IEntityTypeConfiguration<BudgetConsumptionEntity>
+{
+    public void Configure(EntityTypeBuilder<BudgetConsumptionEntity> builder)
+    {
+        builder.ToTable("BudgetConsumptions");
+        builder.HasKey(x => x.Id);
+        builder.Property(x => x.CustomerId).HasMaxLength(128);
+        builder.Property(x => x.ConsumedAmount).HasPrecision(18, 2);
+        builder.HasIndex(x => new { x.PromotionId, x.ConsumptionDateUtc, x.CustomerId })
+            .IsUnique()
+            .HasFilter("[CustomerId] IS NOT NULL");
+        builder.HasIndex(x => new { x.PromotionId, x.ConsumptionDateUtc })
+            .IsUnique()
+            .HasFilter("[CustomerId] IS NULL");
+        builder.HasOne(x => x.Promotion)
+            .WithMany()
+            .HasForeignKey(x => x.PromotionId)
+            .OnDelete(DeleteBehavior.Cascade);
     }
 }

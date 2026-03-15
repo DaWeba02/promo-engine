@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using PromoEngine.Infrastructure.Persistence;
 
@@ -11,9 +12,11 @@ using PromoEngine.Infrastructure.Persistence;
 namespace PromoEngine.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(PromoEngineDbContext))]
-    partial class PromoEngineDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260315202256_VNextPromotionFeatures")]
+    partial class VNextPromotionFeatures
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

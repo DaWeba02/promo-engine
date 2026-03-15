@@ -31,6 +31,17 @@ public static class QuoteEndpoints
             return Results.Ok(response);
         });
 
+        endpoints.MapPost("/simulate/compare", async (
+            SimulationCompareRequestDto request,
+            IValidator<SimulationCompareRequestDto> validator,
+            QuoteService quoteService,
+            CancellationToken cancellationToken) =>
+        {
+            await validator.ValidateAsync(request, cancellationToken);
+            var response = await quoteService.CompareStrategiesAsync(request, cancellationToken);
+            return Results.Ok(response);
+        });
+
         return endpoints;
     }
 }

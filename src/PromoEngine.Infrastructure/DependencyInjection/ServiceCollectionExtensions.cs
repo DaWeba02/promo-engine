@@ -17,6 +17,7 @@ public static class ServiceCollectionExtensions
         services.AddDbContext<PromoEngineDbContext>(options => options.UseSqlServer(connectionString));
         services.AddScoped<IPromotionRepository, PromotionRepository>();
         services.AddScoped<IQuoteAuditRepository, QuoteAuditRepository>();
+        services.AddScoped<IBudgetConsumptionRepository, BudgetConsumptionRepository>();
         services.AddScoped<IPromotionRedemptionRepository, PromotionRedemptionRepository>();
         services.AddScoped<IUnitOfWork>(provider => provider.GetRequiredService<PromoEngineDbContext>());
         return services;

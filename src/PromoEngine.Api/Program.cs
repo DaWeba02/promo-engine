@@ -31,7 +31,11 @@ builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddOpenApi();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.SchemaFilter<EnumSchemaDescriptionFilter>();
+    options.OperationFilter<RequestEnumOperationFilter>();
+});
 builder.Services.AddValidatorsFromAssemblyContaining<QuoteRequestValidator>();
 
 builder.Services.AddSingleton<IClock, SystemClock>();

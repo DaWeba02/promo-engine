@@ -15,7 +15,9 @@ public sealed record QuoteRequestDto(
     string? CouponCode,
     ConflictResolutionStrategy Strategy,
     decimal MinimumMarginRate,
-    IReadOnlyList<QuoteLineRequestDto> Items);
+    IReadOnlyList<QuoteLineRequestDto> Items,
+    Channel? Channel = null,
+    CustomerSegment? Segment = null);
 
 public sealed record QuotedLineDto(
     string Sku,
@@ -35,7 +37,9 @@ public sealed record KpiImpactDto(
     decimal RevenueDelta,
     decimal MarginDelta,
     decimal InventoryScore,
-    decimal BudgetUsage);
+    decimal BudgetUsage,
+    decimal ManufacturerFundingAmount,
+    decimal RetailerFundingAmount);
 
 public sealed record PromotionDecisionDto(
     Guid PromotionId,
@@ -62,6 +66,33 @@ public sealed record QuoteResponseDto(
     IReadOnlyList<PromotionDecisionDto> Promotions,
     KpiImpactDto KpiSummary);
 
+public sealed record SimulationCompareRequestDto(
+    string CustomerId,
+    string Currency,
+    string? CouponCode,
+    IReadOnlyList<ConflictResolutionStrategy> Strategies,
+    decimal MinimumMarginRate,
+    IReadOnlyList<QuoteLineRequestDto> Items,
+    Channel? Channel = null,
+    CustomerSegment? Segment = null);
+
+public sealed record QuoteTotalsDto(
+    decimal Subtotal,
+    decimal DiscountTotal,
+    decimal NetTotal,
+    decimal MarginAmount,
+    decimal MarginRate);
+
+public sealed record SimulationStrategyResultDto(
+    ConflictResolutionStrategy Strategy,
+    QuoteTotalsDto Totals,
+    IReadOnlyList<PromotionDecisionDto> Promotions,
+    KpiImpactDto KpiSummary);
+
+public sealed record SimulationCompareResponseDto(
+    string Currency,
+    IReadOnlyList<SimulationStrategyResultDto> Results);
+
 public sealed record UpsertPromotionRequest(
     string Code,
     string Name,
@@ -84,7 +115,16 @@ public sealed record UpsertPromotionRequest(
     decimal MinimumMarginRate,
     string? CouponCode,
     IReadOnlyList<string> TargetSkus,
-    IReadOnlyList<string> BundleSkus);
+    IReadOnlyList<string> BundleSkus,
+    Channel? Channel = null,
+    CustomerSegment? Segment = null,
+    bool IsCombinable = true,
+    decimal BudgetDailyCap = 0m,
+    decimal? BudgetPerCustomerCap = null,
+    decimal MinimumCartValue = 0m,
+    decimal? MaximumDiscount = null,
+    decimal? FundingManufacturerRate = null,
+    decimal? FundingRetailerRate = null);
 
 public sealed record PromotionDto(
     Guid Id,
@@ -98,8 +138,13 @@ public sealed record PromotionDto(
     DateTimeOffset EndsAtUtc,
     int Priority,
     bool IsFunded,
+    Channel? Channel,
+    CustomerSegment? Segment,
+    bool IsCombinable,
     decimal BudgetCap,
     decimal BudgetConsumed,
+    decimal BudgetDailyCap,
+    decimal? BudgetPerCustomerCap,
     decimal Value,
     DiscountValueType DiscountValueType,
     decimal ThresholdAmount,
@@ -107,6 +152,10 @@ public sealed record PromotionDto(
     int ChargedQuantity,
     decimal BundlePrice,
     decimal MinimumMarginRate,
+    decimal MinimumCartValue,
+    decimal? MaximumDiscount,
+    decimal FundingManufacturerRate,
+    decimal FundingRetailerRate,
     string? CouponCode,
     IReadOnlyList<string> TargetSkus,
     IReadOnlyList<string> BundleSkus);
@@ -128,3 +177,15 @@ public sealed record PromotionRedemptionEntry(
     string PromotionCode,
     decimal Amount,
     DateTimeOffset RedeemedAtUtc);
+
+public sealed record BudgetConsumptionSnapshot(
+    Guid PromotionId,
+    decimal DailyConsumed,
+    decimal CustomerConsumed);
+
+public sealed record BudgetConsumptionEntry(
+    Guid PromotionId,
+    string CustomerId,
+    decimal Amount,
+    DateOnly ConsumptionDateUtc,
+    DateTimeOffset RecordedAtUtc);

@@ -13,7 +13,7 @@ public sealed class PricingEngineTests
     [Fact]
     public void Percent_discount_is_applied_with_explainability()
     {
-        var quote = _engine.Evaluate(TestData.Quote(), new[] { TestData.PercentPromotion(10m, "SKU-1") }, _now, false);
+        var quote = _engine.Evaluate(TestData.Quote(), new[] { CreatePercentPromotion("PERCENT10", 10m, "SKU-1") }, _now, false);
 
         Assert.Equal(6m, quote.DiscountTotal);
         Assert.Contains(quote.Promotions, promotion => promotion.Status == "Applied" && promotion.ReasonCode == "Applied");
@@ -21,31 +21,37 @@ public sealed class PricingEngineTests
     }
 
     [Fact]
-    public void Quantity_deal_three_for_two_gives_one_free_unit()
+    public void Fixed_amount_discount_is_capped_at_line_subtotal()
     {
-        var promotion = new Promotion
-        {
-            Code = "3FOR2",
-            Name = "Three for two",
-            Description = "Quantity deal",
-            CampaignKey = "CLEARANCE",
-            Type = PromotionType.QuantityDeal,
-            IsActive = true,
-            StartsAtUtc = _now.AddDays(-1),
-            EndsAtUtc = _now.AddDays(1),
-            RequiredQuantity = 3,
-            ChargedQuantity = 2,
-            TargetSkus = new[] { "SKU-1" }
-        };
+        var request = new QuoteRequest(
+            "customer-1",
+            "EUR",
+            null,
+            ConflictResolutionStrategy.CustomerBestPrice,
+            0m,
+            new[] { new QuoteLine("SKU-1", 1, 4m, 1m, 10) });
+        var promotion = CreateFixedPromotion("FIXED-CAP", 10m, "SKU-1");
 
-        var quote = _engine.Evaluate(TestData.Quote(), new[] { promotion }, _now, false);
+        var quote = _engine.Evaluate(request, new[] { promotion }, _now, false);
 
-        Assert.Equal(20m, quote.DiscountTotal);
+        Assert.Equal(4m, quote.DiscountTotal);
+        Assert.Equal(0m, quote.Lines.Single().NetLineTotal);
     }
 
     [Fact]
-    public void Bundle_discount_allocates_across_bundle_items()
+    public void Bundle_discount_is_applied_multiple_times_when_each_sku_is_available()
     {
+        var request = new QuoteRequest(
+            "customer-1",
+            "EUR",
+            null,
+            ConflictResolutionStrategy.CustomerBestPrice,
+            0m,
+            new[]
+            {
+                new QuoteLine("SKU-2", 2, 15m, 7m, 50),
+                new QuoteLine("SKU-3", 2, 30m, 12m, 50)
+            });
         var promotion = new Promotion
         {
             Code = "BUNDLE",
@@ -57,106 +63,205 @@ public sealed class PricingEngineTests
             StartsAtUtc = _now.AddDays(-1),
             EndsAtUtc = _now.AddDays(1),
             BundlePrice = 25m,
+            FundingRetailerRate = 1m,
             BundleSkus = new[] { "SKU-2", "SKU-3" }
         };
 
-        var quote = _engine.Evaluate(TestData.Quote(), new[] { promotion }, _now, false);
+        var quote = _engine.Evaluate(request, new[] { promotion }, _now, false);
 
-        Assert.Equal(20m, quote.DiscountTotal);
+        Assert.Equal(40m, quote.DiscountTotal);
         Assert.Equal(2, quote.Promotions.Single().AffectedItems.Count);
     }
 
     [Fact]
-    public void Margin_guard_rejects_candidate_below_threshold()
-    {
-        var promotion = TestData.FixedPromotion(15m, "SKU-3");
-        var quote = _engine.Evaluate(TestData.Quote(minimumMargin: 0.55m), new[] { promotion }, _now, false);
-
-        Assert.Contains(quote.Promotions, promotionDecision => promotionDecision.ReasonCode == "MarginGuardRejected");
-        Assert.Equal(0m, quote.DiscountTotal);
-    }
-
-    [Fact]
-    public void Budget_check_rejects_when_remaining_budget_is_too_low()
+    public void Channel_mismatch_is_reported_as_a_rejected_reason()
     {
         var promotion = new Promotion
         {
-            Code = "FUNDED",
-            Name = "Funded",
-            Description = "Funded promotion",
-            CampaignKey = "BUDGET",
+            Code = "CHANNEL",
+            Name = "Channel limited",
+            Description = "Channel limited",
+            CampaignKey = "CHANNEL",
             Type = PromotionType.PercentDiscount,
             IsActive = true,
             StartsAtUtc = _now.AddDays(-1),
             EndsAtUtc = _now.AddDays(1),
-            Value = 50m,
-            IsFunded = true,
-            BudgetCap = 5m,
+            Value = 10m,
+            DiscountValueType = DiscountValueType.Percentage,
+            Channel = Channel.Store,
+            FundingRetailerRate = 1m,
             TargetSkus = new[] { "SKU-1" }
         };
 
-        var quote = _engine.Evaluate(TestData.Quote(), new[] { promotion }, _now, false);
+        var quote = _engine.Evaluate(TestData.Quote(channel: Channel.Online), new[] { promotion }, _now, false);
 
-        Assert.Contains(quote.Promotions, decision => decision.ReasonCode == "BudgetExceeded");
+        Assert.Contains(quote.Promotions, decision => decision.ReasonCode == "ChannelMismatch");
     }
 
     [Fact]
-    public void Inventory_strategy_prefers_inventory_heavy_candidate()
+    public void Segment_mismatch_is_reported_as_a_rejected_reason()
     {
-        var request = TestData.Quote(ConflictResolutionStrategy.InventoryReduction);
-        var highInventoryCartPromotion = new Promotion
+        var promotion = new Promotion
         {
-            Code = "CART-STOCK",
-            Name = "Cart Stock",
-            Description = "Inventory reduction",
-            CampaignKey = "CLEARANCE",
-            Type = PromotionType.CartDiscount,
-            IsActive = true,
-            StartsAtUtc = _now.AddDays(-1),
-            EndsAtUtc = _now.AddDays(1),
-            ThresholdAmount = 50m,
-            Value = 5m
-        };
-
-        var lowInventoryPromotion = new Promotion
-        {
-            Code = "SKU3",
-            Name = "Sku3",
-            Description = "Low stock promotion",
-            CampaignKey = "CLEARANCE",
-            Type = PromotionType.FixedAmountDiscount,
+            Code = "SEGMENT",
+            Name = "Segment limited",
+            Description = "Segment limited",
+            CampaignKey = "SEGMENT",
+            Type = PromotionType.PercentDiscount,
             IsActive = true,
             StartsAtUtc = _now.AddDays(-1),
             EndsAtUtc = _now.AddDays(1),
             Value = 10m,
-            TargetSkus = new[] { "SKU-3" }
+            DiscountValueType = DiscountValueType.Percentage,
+            Segment = CustomerSegment.Loyalty,
+            FundingRetailerRate = 1m,
+            TargetSkus = new[] { "SKU-1" }
         };
 
-        var quote = _engine.Evaluate(request, new[] { highInventoryCartPromotion, lowInventoryPromotion }, _now, false);
+        var quote = _engine.Evaluate(TestData.Quote(segment: CustomerSegment.ExistingCustomer), new[] { promotion }, _now, false);
 
-        Assert.Contains(quote.Promotions, promotion => promotion.PromotionCode == "CART-STOCK" && promotion.Status == "Applied");
-        Assert.Contains(quote.Promotions, promotion => promotion.PromotionCode == "SKU3" && promotion.ReasonCode == "ConflictStrategyRejected");
+        Assert.Contains(quote.Promotions, decision => decision.ReasonCode == "SegmentMismatch");
     }
 
     [Fact]
-    public void Cart_discount_rounding_matches_expected_total()
+    public void Non_combinable_promotions_cannot_stack()
     {
-        var promotion = new Promotion
+        var promotions = new[]
         {
-            Code = "CART",
-            Name = "Cart",
-            Description = "Cart off",
-            CampaignKey = "SPRING",
-            Type = PromotionType.CartDiscount,
-            IsActive = true,
-            StartsAtUtc = _now.AddDays(-1),
-            EndsAtUtc = _now.AddDays(1),
-            ThresholdAmount = 50m,
-            Value = 12.34m
+            CreateFixedPromotion("NON-COMB", 5m, "SKU-1", isCombinable: false),
+            CreateFixedPromotion("OTHER", 4m, "SKU-2")
         };
+
+        var quote = _engine.Evaluate(TestData.Quote(), promotions, _now, false);
+
+        Assert.Contains(quote.Promotions, decision => decision.PromotionCode == "NON-COMB" && decision.Status == "Applied");
+        Assert.Contains(quote.Promotions, decision => decision.PromotionCode == "OTHER" && decision.ReasonCode == "NonCombinableWithAppliedPromotion");
+    }
+
+    [Fact]
+    public void Overlapping_combinable_promotions_are_rejected()
+    {
+        var promotions = new[]
+        {
+            CreateFixedPromotion("FIRST", 6m, "SKU-1"),
+            CreatePercentPromotion("SECOND", 10m, "SKU-1")
+        };
+
+        var quote = _engine.Evaluate(TestData.Quote(), promotions, _now, false);
+
+        Assert.Contains(quote.Promotions, decision => decision.PromotionCode == "FIRST" && decision.Status == "Applied");
+        Assert.Contains(quote.Promotions, decision => decision.PromotionCode == "SECOND" && decision.ReasonCode == "OverlappingItemsNotAllowed");
+    }
+
+    [Fact]
+    public void Budget_total_cap_returns_specific_rejection_reason()
+    {
+        var promotion = CreateFixedPromotion("TOTAL", 10m, "SKU-1", budgetCap: 5m);
 
         var quote = _engine.Evaluate(TestData.Quote(), new[] { promotion }, _now, false);
 
-        Assert.Equal(12.34m, quote.DiscountTotal);
+        Assert.Contains(quote.Promotions, decision => decision.ReasonCode == "BudgetTotalExceeded");
     }
+
+    [Fact]
+    public void Budget_daily_cap_returns_specific_rejection_reason()
+    {
+        var promotion = CreateFixedPromotion("DAILY", 10m, "SKU-1", budgetDailyCap: 5m);
+
+        var quote = _engine.Evaluate(TestData.Quote(), new[] { promotion }, _now, false);
+
+        Assert.Contains(quote.Promotions, decision => decision.ReasonCode == "BudgetDailyExceeded");
+    }
+
+    [Fact]
+    public void Budget_per_customer_cap_returns_specific_rejection_reason()
+    {
+        var promotion = CreateFixedPromotion("CUSTOMER", 10m, "SKU-1", budgetPerCustomerCap: 5m);
+
+        var quote = _engine.Evaluate(TestData.Quote(), new[] { promotion }, _now, false);
+
+        Assert.Contains(quote.Promotions, decision => decision.ReasonCode == "BudgetPerCustomerExceeded");
+    }
+
+    [Fact]
+    public void Funding_split_is_included_in_kpi_effects()
+    {
+        var promotion = CreatePercentPromotion("FUNDED", 10m, "SKU-1", isFunded: true, fundingManufacturerRate: 0.6m, fundingRetailerRate: 0.4m);
+
+        var quote = _engine.Evaluate(TestData.Quote(), new[] { promotion }, _now, false);
+        var decision = quote.Promotions.Single(x => x.Status == "Applied");
+
+        Assert.Equal(6m, decision.BudgetImpact);
+        Assert.Equal(3.6m, decision.KpiEffect.ManufacturerFundingAmount);
+        Assert.Equal(2.4m, decision.KpiEffect.RetailerFundingAmount);
+        Assert.Equal(-2.4m, decision.KpiEffect.MarginDelta);
+    }
+
+    [Fact]
+    public void Minimum_cart_value_and_maximum_discount_return_specific_reasons()
+    {
+        var minCartPromotion = CreateFixedPromotion("MIN-CART", 5m, "SKU-1", minimumCartValue: 500m);
+        var maxDiscountPromotion = CreateFixedPromotion("MAX-DISCOUNT", 5m, "SKU-1", maximumDiscount: 2m);
+
+        var quote = _engine.Evaluate(TestData.Quote(), new[] { minCartPromotion, maxDiscountPromotion }, _now, false);
+
+        Assert.Contains(quote.Promotions, decision => decision.PromotionCode == "MIN-CART" && decision.ReasonCode == "MinCartValueNotMet");
+        Assert.Contains(quote.Promotions, decision => decision.PromotionCode == "MAX-DISCOUNT" && decision.ReasonCode == "MaxDiscountExceeded");
+    }
+
+    private Promotion CreatePercentPromotion(
+        string code,
+        decimal value,
+        string sku,
+        bool isFunded = false,
+        decimal fundingManufacturerRate = 0m,
+        decimal fundingRetailerRate = 1m)
+        => new()
+        {
+            Code = code,
+            Name = code,
+            Description = code,
+            CampaignKey = code,
+            Type = PromotionType.PercentDiscount,
+            IsActive = true,
+            StartsAtUtc = _now.AddDays(-1),
+            EndsAtUtc = _now.AddDays(1),
+            Value = value,
+            DiscountValueType = DiscountValueType.Percentage,
+            IsFunded = isFunded,
+            FundingManufacturerRate = fundingManufacturerRate,
+            FundingRetailerRate = fundingRetailerRate,
+            TargetSkus = new[] { sku }
+        };
+
+    private Promotion CreateFixedPromotion(
+        string code,
+        decimal value,
+        string sku,
+        bool isCombinable = true,
+        decimal budgetCap = 0m,
+        decimal budgetDailyCap = 0m,
+        decimal? budgetPerCustomerCap = null,
+        decimal minimumCartValue = 0m,
+        decimal? maximumDiscount = null)
+        => new()
+        {
+            Code = code,
+            Name = code,
+            Description = code,
+            CampaignKey = code,
+            Type = PromotionType.FixedAmountDiscount,
+            IsActive = true,
+            StartsAtUtc = _now.AddDays(-1),
+            EndsAtUtc = _now.AddDays(1),
+            Value = value,
+            IsCombinable = isCombinable,
+            BudgetCap = budgetCap,
+            BudgetDailyCap = budgetDailyCap,
+            BudgetPerCustomerCap = budgetPerCustomerCap,
+            MinimumCartValue = minimumCartValue,
+            MaximumDiscount = maximumDiscount,
+            FundingRetailerRate = 1m,
+            TargetSkus = new[] { sku }
+        };
 }

@@ -45,8 +45,13 @@ public sealed class PromotionRepository(PromoEngineDbContext dbContext) : IPromo
         entity.EndsAtUtc = promotion.EndsAtUtc;
         entity.Priority = promotion.Priority;
         entity.IsFunded = promotion.IsFunded;
+        entity.Channel = (int?)promotion.Channel;
+        entity.Segment = (int?)promotion.Segment;
+        entity.IsCombinable = promotion.IsCombinable;
         entity.BudgetCap = promotion.BudgetCap;
         entity.BudgetConsumed = promotion.BudgetConsumed;
+        entity.BudgetDailyCap = promotion.BudgetDailyCap;
+        entity.BudgetPerCustomerCap = promotion.BudgetPerCustomerCap;
         entity.Value = promotion.Value;
         entity.DiscountValueType = (int)promotion.DiscountValueType;
         entity.ThresholdAmount = promotion.ThresholdAmount;
@@ -54,6 +59,10 @@ public sealed class PromotionRepository(PromoEngineDbContext dbContext) : IPromo
         entity.ChargedQuantity = promotion.ChargedQuantity;
         entity.BundlePrice = promotion.BundlePrice;
         entity.MinimumMarginRate = promotion.MinimumMarginRate;
+        entity.MinimumCartValue = promotion.MinimumCartValue;
+        entity.MaximumDiscount = promotion.MaximumDiscount;
+        entity.FundingManufacturerRate = promotion.FundingManufacturerRate;
+        entity.FundingRetailerRate = promotion.FundingRetailerRate;
         entity.CouponCode = promotion.CouponCode;
         entity.TargetSkus = SerializeList(promotion.TargetSkus);
         entity.BundleSkus = SerializeList(promotion.BundleSkus);
@@ -79,8 +88,13 @@ public sealed class PromotionRepository(PromoEngineDbContext dbContext) : IPromo
         EndsAtUtc = entity.EndsAtUtc,
         Priority = entity.Priority,
         IsFunded = entity.IsFunded,
+        Channel = entity.Channel.HasValue ? (Channel)entity.Channel.Value : null,
+        Segment = entity.Segment.HasValue ? (CustomerSegment)entity.Segment.Value : null,
+        IsCombinable = entity.IsCombinable,
         BudgetCap = entity.BudgetCap,
         BudgetConsumed = entity.BudgetConsumed,
+        BudgetDailyCap = entity.BudgetDailyCap,
+        BudgetPerCustomerCap = entity.BudgetPerCustomerCap,
         Value = entity.Value,
         DiscountValueType = (DiscountValueType)entity.DiscountValueType,
         ThresholdAmount = entity.ThresholdAmount,
@@ -88,6 +102,10 @@ public sealed class PromotionRepository(PromoEngineDbContext dbContext) : IPromo
         ChargedQuantity = entity.ChargedQuantity,
         BundlePrice = entity.BundlePrice,
         MinimumMarginRate = entity.MinimumMarginRate,
+        MinimumCartValue = entity.MinimumCartValue,
+        MaximumDiscount = entity.MaximumDiscount,
+        FundingManufacturerRate = entity.FundingManufacturerRate,
+        FundingRetailerRate = entity.FundingRetailerRate,
         CouponCode = entity.CouponCode,
         TargetSkus = DeserializeList(entity.TargetSkus),
         BundleSkus = DeserializeList(entity.BundleSkus)
@@ -106,8 +124,13 @@ public sealed class PromotionRepository(PromoEngineDbContext dbContext) : IPromo
         EndsAtUtc = promotion.EndsAtUtc,
         Priority = promotion.Priority,
         IsFunded = promotion.IsFunded,
+        Channel = (int?)promotion.Channel,
+        Segment = (int?)promotion.Segment,
+        IsCombinable = promotion.IsCombinable,
         BudgetCap = promotion.BudgetCap,
         BudgetConsumed = promotion.BudgetConsumed,
+        BudgetDailyCap = promotion.BudgetDailyCap,
+        BudgetPerCustomerCap = promotion.BudgetPerCustomerCap,
         Value = promotion.Value,
         DiscountValueType = (int)promotion.DiscountValueType,
         ThresholdAmount = promotion.ThresholdAmount,
@@ -115,6 +138,10 @@ public sealed class PromotionRepository(PromoEngineDbContext dbContext) : IPromo
         ChargedQuantity = promotion.ChargedQuantity,
         BundlePrice = promotion.BundlePrice,
         MinimumMarginRate = promotion.MinimumMarginRate,
+        MinimumCartValue = promotion.MinimumCartValue,
+        MaximumDiscount = promotion.MaximumDiscount,
+        FundingManufacturerRate = promotion.FundingManufacturerRate,
+        FundingRetailerRate = promotion.FundingRetailerRate,
         CouponCode = promotion.CouponCode,
         TargetSkus = SerializeList(promotion.TargetSkus),
         BundleSkus = SerializeList(promotion.BundleSkus),
@@ -151,11 +178,85 @@ public sealed class QuoteAuditRepository(PromoEngineDbContext dbContext) : IQuot
     }
 }
 
+public sealed class BudgetConsumptionRepository(PromoEngineDbContext dbContext) : IBudgetConsumptionRepository
+{
+    public async Task<IReadOnlyDictionary<Guid, BudgetConsumptionSnapshot>> GetSnapshotsAsync(
+        IReadOnlyCollection<Guid> promotionIds,
+        DateOnly consumptionDateUtc,
+        string customerId,
+        CancellationToken cancellationToken)
+    {
+        var ids = promotionIds.Distinct().ToArray();
+        if (ids.Length == 0)
+        {
+            return new Dictionary<Guid, BudgetConsumptionSnapshot>();
+        }
+
+        var entries = await dbContext.BudgetConsumptions
+            .AsNoTracking()
+            .Where(x => ids.Contains(x.PromotionId) && x.ConsumptionDateUtc == consumptionDateUtc && (x.CustomerId == null || x.CustomerId == customerId))
+            .ToListAsync(cancellationToken);
+
+        return ids.ToDictionary(
+            id => id,
+            id => new BudgetConsumptionSnapshot(
+                id,
+                entries.Where(x => x.PromotionId == id && x.CustomerId == null).Sum(x => x.ConsumedAmount),
+                entries.Where(x => x.PromotionId == id && x.CustomerId == customerId).Sum(x => x.ConsumedAmount)));
+    }
+
+    public async Task AddRangeAsync(IEnumerable<BudgetConsumptionEntry> entries, CancellationToken cancellationToken)
+    {
+        var materializedEntries = entries.Where(entry => entry.Amount > 0m).ToArray();
+        foreach (var entry in materializedEntries)
+        {
+            await UpsertBucketAsync(entry.PromotionId, entry.ConsumptionDateUtc, null, entry.Amount, entry.RecordedAtUtc, cancellationToken);
+            await UpsertBucketAsync(entry.PromotionId, entry.ConsumptionDateUtc, entry.CustomerId, entry.Amount, entry.RecordedAtUtc, cancellationToken);
+        }
+    }
+
+    private async Task UpsertBucketAsync(
+        Guid promotionId,
+        DateOnly consumptionDateUtc,
+        string? customerId,
+        decimal amount,
+        DateTimeOffset recordedAtUtc,
+        CancellationToken cancellationToken)
+    {
+        var bucket = await dbContext.BudgetConsumptions.FirstOrDefaultAsync(
+            x => x.PromotionId == promotionId && x.ConsumptionDateUtc == consumptionDateUtc && x.CustomerId == customerId,
+            cancellationToken);
+
+        if (bucket is null)
+        {
+            dbContext.BudgetConsumptions.Add(new BudgetConsumptionEntity
+            {
+                Id = Guid.NewGuid(),
+                PromotionId = promotionId,
+                ConsumptionDateUtc = consumptionDateUtc,
+                CustomerId = customerId,
+                ConsumedAmount = amount,
+                CreatedAtUtc = recordedAtUtc,
+                UpdatedAtUtc = recordedAtUtc
+            });
+
+            return;
+        }
+
+        bucket.ConsumedAmount += amount;
+        bucket.UpdatedAtUtc = recordedAtUtc;
+    }
+}
+
 public sealed class PromotionRedemptionRepository(PromoEngineDbContext dbContext) : IPromotionRedemptionRepository
 {
     public async Task AddRangeAsync(IEnumerable<PromotionRedemptionEntry> entries, CancellationToken cancellationToken)
     {
-        foreach (var entry in entries.Where(x => x.Amount > 0m))
+        var materializedEntries = entries.Where(x => x.Amount > 0m).ToArray();
+        var promotionIds = materializedEntries.Select(entry => entry.PromotionId).Distinct().ToArray();
+        var promotions = await dbContext.Promotions.Where(x => promotionIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, cancellationToken);
+
+        foreach (var entry in materializedEntries)
         {
             dbContext.PromotionRedemptions.Add(new PromotionRedemptionEntity
             {
@@ -167,9 +268,11 @@ public sealed class PromotionRedemptionRepository(PromoEngineDbContext dbContext
                 RedeemedAtUtc = entry.RedeemedAtUtc
             });
 
-            var promotion = await dbContext.Promotions.FirstAsync(x => x.Id == entry.PromotionId, cancellationToken);
-            promotion.BudgetConsumed += entry.Amount;
-            promotion.UpdatedAtUtc = DateTimeOffset.UtcNow;
+            if (promotions.TryGetValue(entry.PromotionId, out var promotion))
+            {
+                promotion.BudgetConsumed += entry.Amount;
+                promotion.UpdatedAtUtc = DateTimeOffset.UtcNow;
+            }
         }
     }
 }

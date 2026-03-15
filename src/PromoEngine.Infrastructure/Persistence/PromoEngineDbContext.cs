@@ -9,6 +9,7 @@ public sealed class PromoEngineDbContext(DbContextOptions<PromoEngineDbContext> 
     public DbSet<PromotionEntity> Promotions => Set<PromotionEntity>();
     public DbSet<PromotionRedemptionEntity> PromotionRedemptions => Set<PromotionRedemptionEntity>();
     public DbSet<QuoteAuditEntity> QuoteAudits => Set<QuoteAuditEntity>();
+    public DbSet<BudgetConsumptionEntity> BudgetConsumptions => Set<BudgetConsumptionEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -39,8 +40,13 @@ public sealed class PromotionEntity
     public DateTimeOffset EndsAtUtc { get; set; }
     public int Priority { get; set; }
     public bool IsFunded { get; set; }
+    public int? Channel { get; set; }
+    public int? Segment { get; set; }
+    public bool IsCombinable { get; set; }
     public decimal BudgetCap { get; set; }
     public decimal BudgetConsumed { get; set; }
+    public decimal BudgetDailyCap { get; set; }
+    public decimal? BudgetPerCustomerCap { get; set; }
     public decimal Value { get; set; }
     public int DiscountValueType { get; set; }
     public decimal ThresholdAmount { get; set; }
@@ -48,6 +54,10 @@ public sealed class PromotionEntity
     public int ChargedQuantity { get; set; }
     public decimal BundlePrice { get; set; }
     public decimal MinimumMarginRate { get; set; }
+    public decimal MinimumCartValue { get; set; }
+    public decimal? MaximumDiscount { get; set; }
+    public decimal FundingManufacturerRate { get; set; }
+    public decimal FundingRetailerRate { get; set; }
     public string? CouponCode { get; set; }
     public string TargetSkus { get; set; } = string.Empty;
     public string BundleSkus { get; set; } = string.Empty;
@@ -77,4 +87,16 @@ public sealed class QuoteAuditEntity
     public string RequestJson { get; set; } = string.Empty;
     public string ResponseJson { get; set; } = string.Empty;
     public DateTimeOffset CreatedAtUtc { get; set; }
+}
+
+public sealed class BudgetConsumptionEntity
+{
+    public Guid Id { get; set; }
+    public Guid PromotionId { get; set; }
+    public DateOnly ConsumptionDateUtc { get; set; }
+    public string? CustomerId { get; set; }
+    public decimal ConsumedAmount { get; set; }
+    public DateTimeOffset CreatedAtUtc { get; set; }
+    public DateTimeOffset UpdatedAtUtc { get; set; }
+    public PromotionEntity? Promotion { get; set; }
 }

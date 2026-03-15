@@ -14,13 +14,12 @@ public sealed class PricingEngine : IPricingEngine
 
         var subtotal = Money.Round(request.Items.Sum(item => item.Quantity * item.UnitPrice));
         var costTotal = Money.Round(request.Items.Sum(item => item.Quantity * item.UnitCost));
-        var initialMarginAmount = Money.Round(subtotal - costTotal);
         var decisions = new List<PromotionDecision>();
         var candidates = new List<EvaluatedPromotion>();
 
         foreach (var promotion in promotions)
         {
-            var evaluation = EvaluatePromotion(request, promotion, now);
+            var evaluation = EvaluatePromotion(request, promotion, now, subtotal);
             if (evaluation.Candidate is null)
             {
                 decisions.Add(evaluation.Decision);
@@ -31,21 +30,26 @@ public sealed class PricingEngine : IPricingEngine
         }
 
         var runningDiscount = 0m;
+        var runningManufacturerFunding = 0m;
+        var runningRetailerFunding = 0m;
         var selected = new List<EvaluatedPromotion>();
-        var reservedLines = new HashSet<int>();
 
-        foreach (var candidate in OrderCandidates(candidates, request.Strategy, subtotal, initialMarginAmount))
+        foreach (var candidate in OrderCandidates(candidates, request.Strategy, subtotal, costTotal))
         {
-            if (candidate.AffectedLineIndexes.Any(reservedLines.Contains))
+            var stackingReason = GetStackingRejectionReason(candidate, selected);
+            if (stackingReason is not null)
             {
-                decisions.Add(candidate.ToRejectedDecision("ConflictStrategyRejected"));
+                decisions.Add(candidate.ToRejectedDecision(stackingReason));
                 continue;
             }
 
             var projectedDiscount = Money.Round(runningDiscount + candidate.TotalDiscount);
             var projectedNet = Money.Round(subtotal - projectedDiscount);
-            var projectedMargin = Money.Round(projectedNet - costTotal);
-            var projectedMarginRate = projectedNet <= 0m ? 0m : Math.Max(0m, projectedMargin / projectedNet);
+            var projectedManufacturerFunding = Money.Round(runningManufacturerFunding + candidate.ManufacturerFundingAmount);
+            var projectedRetailerFunding = Money.Round(runningRetailerFunding + candidate.RetailerFundingAmount);
+            var projectedMarginBase = Money.Round(projectedNet + projectedManufacturerFunding);
+            var projectedMargin = Money.Round(projectedMarginBase - costTotal);
+            var projectedMarginRate = projectedMarginBase <= 0m ? 0m : Math.Max(0m, projectedMargin / projectedMarginBase);
             var requiredMarginRate = Math.Max(request.MinimumMarginRate, candidate.Promotion.MinimumMarginRate);
             if (projectedMarginRate < requiredMarginRate)
             {
@@ -53,19 +57,17 @@ public sealed class PricingEngine : IPricingEngine
                 continue;
             }
 
-            if (candidate.BudgetImpact > candidate.Promotion.BudgetRemaining)
+            var budgetReason = GetBudgetRejectionReason(candidate);
+            if (budgetReason is not null)
             {
-                decisions.Add(candidate.ToRejectedDecision("BudgetExceeded"));
+                decisions.Add(candidate.ToRejectedDecision(budgetReason));
                 continue;
             }
 
             selected.Add(candidate);
             runningDiscount = projectedDiscount;
-            foreach (var lineIndex in candidate.AffectedLineIndexes)
-            {
-                reservedLines.Add(lineIndex);
-            }
-
+            runningManufacturerFunding = projectedManufacturerFunding;
+            runningRetailerFunding = projectedRetailerFunding;
             decisions.Add(candidate.ToAppliedDecision());
         }
 
@@ -96,13 +98,18 @@ public sealed class PricingEngine : IPricingEngine
 
         var discountTotal = Money.Round(lines.Sum(line => line.DiscountAmount));
         var netTotal = Money.Round(subtotal - discountTotal);
-        var marginAmount = Money.Round(netTotal - costTotal);
-        var marginRate = netTotal <= 0m ? 0m : Math.Max(0m, marginAmount / netTotal);
+        var manufacturerFundingTotal = Money.Round(selected.Sum(candidate => candidate.ManufacturerFundingAmount));
+        var retailerFundingTotal = Money.Round(selected.Sum(candidate => candidate.RetailerFundingAmount));
+        var marginBase = Money.Round(netTotal + manufacturerFundingTotal);
+        var marginAmount = Money.Round(marginBase - costTotal);
+        var marginRate = marginBase <= 0m ? 0m : Math.Max(0m, marginAmount / marginBase);
         var kpiSummary = new KpiImpact(
             RevenueDelta: Money.Round(-discountTotal),
-            MarginDelta: Money.Round(-discountTotal),
+            MarginDelta: Money.Round(-retailerFundingTotal),
             InventoryScore: Money.Round(selected.Sum(candidate => candidate.InventoryScore)),
-            BudgetUsage: Money.Round(selected.Sum(candidate => candidate.BudgetImpact)));
+            BudgetUsage: Money.Round(selected.Sum(candidate => candidate.BudgetImpact)),
+            ManufacturerFundingAmount: manufacturerFundingTotal,
+            RetailerFundingAmount: retailerFundingTotal);
 
         return new PriceQuote(
             QuoteId: Guid.NewGuid(),
@@ -123,16 +130,16 @@ public sealed class PricingEngine : IPricingEngine
         IEnumerable<EvaluatedPromotion> candidates,
         ConflictResolutionStrategy strategy,
         decimal subtotal,
-        decimal initialMarginAmount)
+        decimal costTotal)
     {
         return strategy switch
         {
             ConflictResolutionStrategy.MarginFirst => candidates
-                .OrderByDescending(candidate => subtotal <= 0m ? 0m : (initialMarginAmount - candidate.TotalDiscount) / Math.Max(0.01m, subtotal - candidate.TotalDiscount))
+                .OrderByDescending(candidate => GetProjectedMarginRate(candidate, subtotal, costTotal))
                 .ThenByDescending(candidate => candidate.Promotion.Priority)
                 .ThenBy(candidate => candidate.Promotion.Code, StringComparer.OrdinalIgnoreCase),
             ConflictResolutionStrategy.FundedPromotionPreferred => candidates
-                .OrderByDescending(candidate => candidate.Promotion.IsFunded)
+                .OrderByDescending(candidate => candidate.ManufacturerFundingAmount)
                 .ThenByDescending(candidate => candidate.TotalDiscount)
                 .ThenByDescending(candidate => candidate.Promotion.Priority)
                 .ThenBy(candidate => candidate.Promotion.Code, StringComparer.OrdinalIgnoreCase),
@@ -152,7 +159,15 @@ public sealed class PricingEngine : IPricingEngine
         };
     }
 
-    private static PromotionEvaluation EvaluatePromotion(QuoteRequest request, Promotion promotion, DateTimeOffset now)
+    private static decimal GetProjectedMarginRate(EvaluatedPromotion candidate, decimal subtotal, decimal costTotal)
+    {
+        var projectedNet = Money.Round(subtotal - candidate.TotalDiscount);
+        var projectedMarginBase = Money.Round(projectedNet + candidate.ManufacturerFundingAmount);
+        var projectedMargin = Money.Round(projectedMarginBase - costTotal);
+        return projectedMarginBase <= 0m ? 0m : Math.Max(0m, projectedMargin / projectedMarginBase);
+    }
+
+    private static PromotionEvaluation EvaluatePromotion(QuoteRequest request, Promotion promotion, DateTimeOffset now, decimal subtotal)
     {
         if (!promotion.IsActive)
         {
@@ -162,6 +177,21 @@ public sealed class PricingEngine : IPricingEngine
         if (promotion.StartsAtUtc > now || promotion.EndsAtUtc < now)
         {
             return PromotionEvaluation.Rejected(promotion, "OutsideValidityWindow");
+        }
+
+        if (promotion.Channel.HasValue && promotion.Channel.Value != request.Channel)
+        {
+            return PromotionEvaluation.Rejected(promotion, "ChannelMismatch");
+        }
+
+        if (promotion.Segment.HasValue && promotion.Segment.Value != request.Segment)
+        {
+            return PromotionEvaluation.Rejected(promotion, "SegmentMismatch");
+        }
+
+        if (subtotal < promotion.MinimumCartValue)
+        {
+            return PromotionEvaluation.Rejected(promotion, "MinCartValueNotMet");
         }
 
         if (promotion.Type == PromotionType.Coupon && !string.Equals(promotion.CouponCode, request.CouponCode, StringComparison.OrdinalIgnoreCase))
@@ -179,7 +209,7 @@ public sealed class PricingEngine : IPricingEngine
         {
             PromotionType.PercentDiscount => EvaluatePercentDiscount(request, promotion, targetIndexes),
             PromotionType.FixedAmountDiscount => EvaluateFixedAmountDiscount(request, promotion, targetIndexes),
-            PromotionType.CartDiscount => EvaluateCartDiscount(request, promotion),
+            PromotionType.CartDiscount => EvaluateCartDiscount(request, promotion, subtotal),
             PromotionType.QuantityDeal => EvaluateQuantityDeal(request, promotion, targetIndexes),
             PromotionType.Bundle => EvaluateBundle(request, promotion),
             PromotionType.Coupon => EvaluateCoupon(request, promotion, targetIndexes),
@@ -196,13 +226,20 @@ public sealed class PricingEngine : IPricingEngine
 
     private static PromotionEvaluation EvaluateFixedAmountDiscount(QuoteRequest request, Promotion promotion, IReadOnlyList<int> targetIndexes)
     {
-        var discounts = targetIndexes.ToDictionary(index => index, index => Money.Round(request.Items[index].Quantity * promotion.Value));
+        var discounts = targetIndexes.ToDictionary(
+            index => index,
+            index =>
+            {
+                var lineSubtotal = Money.Round(request.Items[index].Quantity * request.Items[index].UnitPrice);
+                var calculatedDiscount = Money.Round(request.Items[index].Quantity * promotion.Value);
+                return Math.Min(lineSubtotal, calculatedDiscount);
+            });
+
         return CreateCandidate(promotion, request, targetIndexes, discounts);
     }
 
-    private static PromotionEvaluation EvaluateCartDiscount(QuoteRequest request, Promotion promotion)
+    private static PromotionEvaluation EvaluateCartDiscount(QuoteRequest request, Promotion promotion, decimal subtotal)
     {
-        var subtotal = Money.Round(request.Items.Sum(item => item.Quantity * item.UnitPrice));
         if (subtotal < promotion.ThresholdAmount)
         {
             return PromotionEvaluation.Rejected(promotion, "CartThresholdNotMet");
@@ -234,37 +271,72 @@ public sealed class PricingEngine : IPricingEngine
 
     private static PromotionEvaluation EvaluateBundle(QuoteRequest request, Promotion promotion)
     {
-        var bundleSkus = promotion.BundleSkus.Where(sku => !string.IsNullOrWhiteSpace(sku)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var bundleSkus = promotion.BundleSkus
+            .Where(sku => !string.IsNullOrWhiteSpace(sku))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
         if (bundleSkus.Length == 0)
         {
             return PromotionEvaluation.Rejected(promotion, "BundleDefinitionMissing");
         }
 
         var matchingLines = request.Items
-            .Select((item, index) => new { item, index })
-            .Where(x => bundleSkus.Contains(x.item.Sku, StringComparer.OrdinalIgnoreCase))
+            .Select((item, index) => new IndexedLine(index, item))
+            .Where(x => bundleSkus.Contains(x.Line.Sku, StringComparer.OrdinalIgnoreCase))
             .ToArray();
 
-        if (matchingLines.Length != bundleSkus.Length)
+        if (matchingLines.Length == 0)
         {
             return PromotionEvaluation.Rejected(promotion, "BundleRequirementsNotMet");
         }
 
-        var bundleCount = matchingLines.Min(x => x.item.Quantity);
+        var bundleCount = bundleSkus
+            .Select(sku => matchingLines
+                .Where(x => string.Equals(x.Line.Sku, sku, StringComparison.OrdinalIgnoreCase))
+                .Sum(x => x.Line.Quantity))
+            .Min();
+
         if (bundleCount <= 0)
         {
             return PromotionEvaluation.Rejected(promotion, "BundleRequirementsNotMet");
         }
 
-        var regularTotal = Money.Round(matchingLines.Sum(line => line.item.UnitPrice) * bundleCount);
+        var weights = new Dictionary<int, decimal>();
+        foreach (var sku in bundleSkus)
+        {
+            var remainingUnits = bundleCount;
+            foreach (var matchingLine in matchingLines.Where(x => string.Equals(x.Line.Sku, sku, StringComparison.OrdinalIgnoreCase)).OrderBy(x => x.Index))
+            {
+                if (remainingUnits <= 0)
+                {
+                    break;
+                }
+
+                var consumedUnits = Math.Min(remainingUnits, matchingLine.Line.Quantity);
+                if (consumedUnits <= 0)
+                {
+                    continue;
+                }
+
+                weights[matchingLine.Index] = Money.Round(weights.GetValueOrDefault(matchingLine.Index) + (matchingLine.Line.UnitPrice * consumedUnits));
+                remainingUnits -= consumedUnits;
+            }
+
+            if (remainingUnits > 0)
+            {
+                return PromotionEvaluation.Rejected(promotion, "BundleRequirementsNotMet");
+            }
+        }
+
+        var regularTotal = Money.Round(weights.Values.Sum());
         var discount = Money.Round(regularTotal - (promotion.BundlePrice * bundleCount));
         if (discount <= 0m)
         {
             return PromotionEvaluation.Rejected(promotion, "BundleNotBeneficial");
         }
 
-        var weights = matchingLines.ToDictionary(x => x.index, x => x.item.UnitPrice * bundleCount);
-        return CreateCandidate(promotion, request, matchingLines.Select(x => x.index).ToArray(), Money.Allocate(discount, weights));
+        return CreateCandidate(promotion, request, weights.Keys.OrderBy(index => index).ToArray(), Money.Allocate(discount, weights));
     }
 
     private static PromotionEvaluation EvaluateCoupon(QuoteRequest request, Promotion promotion, IReadOnlyList<int> targetIndexes)
@@ -297,6 +369,13 @@ public sealed class PricingEngine : IPricingEngine
         }
 
         var totalDiscount = Money.Round(cleanedDiscounts.Values.Sum());
+        if (promotion.MaximumDiscount.HasValue && totalDiscount > promotion.MaximumDiscount.Value)
+        {
+            return PromotionEvaluation.Rejected(promotion, "MaxDiscountExceeded");
+        }
+
+        var manufacturerFundingAmount = Money.Round(totalDiscount * promotion.FundingManufacturerRate);
+        var retailerFundingAmount = Money.Round(totalDiscount - manufacturerFundingAmount);
         var inventoryScore = Money.Round(cleanedDiscounts.Keys.Sum(index => (request.Items[index].StockLevel ?? 0) * request.Items[index].Quantity));
         var impacts = cleanedDiscounts
             .Select(x => new PromotionLineImpact(request.Items[x.Key].Sku, request.Items[x.Key].Quantity, x.Value))
@@ -307,7 +386,9 @@ public sealed class PricingEngine : IPricingEngine
             cleanedDiscounts,
             lineIndexes.Distinct().OrderBy(index => index).ToArray(),
             totalDiscount,
-            promotion.BudgetCap > 0m || promotion.IsFunded ? totalDiscount : 0m,
+            totalDiscount,
+            manufacturerFundingAmount,
+            retailerFundingAmount,
             inventoryScore,
             impacts));
     }
@@ -326,6 +407,40 @@ public sealed class PricingEngine : IPricingEngine
             .ToArray();
     }
 
+    private static string? GetStackingRejectionReason(EvaluatedPromotion candidate, IReadOnlyCollection<EvaluatedPromotion> selected)
+    {
+        if (selected.Count == 0)
+        {
+            return null;
+        }
+
+        if (!candidate.Promotion.IsCombinable || selected.Any(existing => !existing.Promotion.IsCombinable))
+        {
+            return "NonCombinableWithAppliedPromotion";
+        }
+
+        return candidate.AffectedLineIndexes.Intersect(selected.SelectMany(existing => existing.AffectedLineIndexes)).Any()
+            ? "OverlappingItemsNotAllowed"
+            : null;
+    }
+
+    private static string? GetBudgetRejectionReason(EvaluatedPromotion candidate)
+    {
+        if (candidate.BudgetImpact > candidate.Promotion.BudgetRemaining)
+        {
+            return "BudgetTotalExceeded";
+        }
+
+        if (candidate.BudgetImpact > candidate.Promotion.BudgetDailyRemaining)
+        {
+            return "BudgetDailyExceeded";
+        }
+
+        return candidate.BudgetImpact > candidate.Promotion.BudgetPerCustomerRemaining
+            ? "BudgetPerCustomerExceeded"
+            : null;
+    }
+
     private sealed record PromotionEvaluation(EvaluatedPromotion? Candidate, PromotionDecision Decision)
     {
         public static PromotionEvaluation Accepted(EvaluatedPromotion candidate) => new(candidate, candidate.ToAppliedDecision());
@@ -341,7 +456,7 @@ public sealed class PricingEngine : IPricingEngine
                 0m,
                 0m,
                 Array.Empty<PromotionLineImpact>(),
-                new KpiImpact(0m, 0m, 0m, 0m)));
+                new KpiImpact(0m, 0m, 0m, 0m, 0m, 0m)));
     }
 
     private sealed record EvaluatedPromotion(
@@ -350,6 +465,8 @@ public sealed class PricingEngine : IPricingEngine
         IReadOnlyList<int> AffectedLineIndexes,
         decimal TotalDiscount,
         decimal BudgetImpact,
+        decimal ManufacturerFundingAmount,
+        decimal RetailerFundingAmount,
         decimal InventoryScore,
         IReadOnlyList<PromotionLineImpact> AffectedItems)
     {
@@ -362,7 +479,7 @@ public sealed class PricingEngine : IPricingEngine
             TotalDiscount,
             BudgetImpact,
             AffectedItems,
-            new KpiImpact(-TotalDiscount, -TotalDiscount, InventoryScore, BudgetImpact));
+            new KpiImpact(-TotalDiscount, -RetailerFundingAmount, InventoryScore, BudgetImpact, ManufacturerFundingAmount, RetailerFundingAmount));
 
         public PromotionDecision ToRejectedDecision(string reasonCode) => new(
             Promotion.Id,
@@ -373,6 +490,8 @@ public sealed class PricingEngine : IPricingEngine
             TotalDiscount,
             0m,
             AffectedItems,
-            new KpiImpact(0m, 0m, InventoryScore, 0m));
+            new KpiImpact(0m, 0m, InventoryScore, 0m, 0m, 0m));
     }
+
+    private sealed record IndexedLine(int Index, QuoteLine Line);
 }

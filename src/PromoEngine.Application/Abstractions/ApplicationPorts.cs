@@ -18,6 +18,17 @@ public interface IQuoteAuditRepository
     Task AddAsync(QuoteAuditEntry entry, CancellationToken cancellationToken);
 }
 
+public interface IBudgetConsumptionRepository
+{
+    Task<IReadOnlyDictionary<Guid, BudgetConsumptionSnapshot>> GetSnapshotsAsync(
+        IReadOnlyCollection<Guid> promotionIds,
+        DateOnly consumptionDateUtc,
+        string customerId,
+        CancellationToken cancellationToken);
+
+    Task AddRangeAsync(IEnumerable<BudgetConsumptionEntry> entries, CancellationToken cancellationToken);
+}
+
 public interface IPromotionRedemptionRepository
 {
     Task AddRangeAsync(IEnumerable<PromotionRedemptionEntry> entries, CancellationToken cancellationToken);

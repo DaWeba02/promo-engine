@@ -16,6 +16,8 @@ internal static class TestData
         StartsAtUtc = DateTimeOffset.UtcNow.AddDays(-1),
         EndsAtUtc = DateTimeOffset.UtcNow.AddDays(1),
         Value = value,
+        DiscountValueType = DiscountValueType.Percentage,
+        FundingRetailerRate = 1m,
         TargetSkus = skus.Length == 0 ? new[] { "SKU-1" } : skus
     };
 
@@ -30,10 +32,16 @@ internal static class TestData
         StartsAtUtc = DateTimeOffset.UtcNow.AddDays(-1),
         EndsAtUtc = DateTimeOffset.UtcNow.AddDays(1),
         Value = value,
+        FundingRetailerRate = 1m,
         TargetSkus = skus.Length == 0 ? new[] { "SKU-1" } : skus
     };
 
-    public static QuoteRequest Quote(ConflictResolutionStrategy strategy = ConflictResolutionStrategy.CustomerBestPrice, string? coupon = null, decimal minimumMargin = 0m)
+    public static QuoteRequest Quote(
+        ConflictResolutionStrategy strategy = ConflictResolutionStrategy.CustomerBestPrice,
+        string? coupon = null,
+        decimal minimumMargin = 0m,
+        Channel channel = Channel.Online,
+        CustomerSegment segment = CustomerSegment.ExistingCustomer)
         => new(
             "customer-1",
             "EUR",
@@ -45,5 +53,7 @@ internal static class TestData
                 new QuoteLine("SKU-1", 3, 20m, 10m, 50),
                 new QuoteLine("SKU-2", 2, 15m, 7m, 200),
                 new QuoteLine("SKU-3", 1, 30m, 12m, 5)
-            });
+            },
+            channel,
+            segment);
 }
